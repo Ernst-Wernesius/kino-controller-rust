@@ -1,3 +1,12 @@
+use esp_idf_svc::hal::prelude::Peripherals;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition};
+use std::sync::mpsc;
+use std::net::UdpSocket;
+use anyhow::Result;
+use esp_idf_svc::hal::peripherals::Peripherals;
+use esp_idf_svc::wifi::EspWifi;
+
 pub mod receiver;
 pub mod wifi;
 
@@ -15,11 +24,6 @@ const RECEIVER_PORT: u16 = 8102;
 
 // MAC-Adresse für WakeonLan:
 const PC_MAC: [u8; 6] = [***MAC-Adresse***];
-
-// Pins deklarieren:
-const PIN_IR_REC: u8 = 15;
-const PIN_IR_BEAMER: u8 = 4;
-const PIN_IR_SCREEN: u8 = 5;
 
 // Infrarot Daten:
 const IR_DATA_SCREEN_DOWN: [u16; 199] = [
@@ -64,13 +68,39 @@ const IR_DATA_SCREEN_UP: [u16; 149] = [
 const IR_DATA_BEAMER: u32 = 0xC12FE817;
 const IR_DATA_REMOTE: u32 = 0x506A11EE;
 
-fn main() {
-    // It is necessary to call this function once. Otherwise, some patches to the runtime
-    // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
+fn main() -> Result<()> {
+    // Patches und Logger:
     esp_idf_svc::sys::link_patches();
-
-    // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("Hello, world!");
+    // Hardware holen:
+    let peripherals = Peripherals::take().unwrap();
+    let sysloop = EspSystemEventLoop::take()?;
+    let nvs = EspDefaultNvsPartition::take()?;
+
+    // WLAN verbinden
+    let _wifi = wifi::connect_wifi(
+        SSID,
+        PASSWORD,
+        peripherals.modem,
+        sysloop,
+        nvs
+    )?;
+
+    // MPSC Kanal und UDP Socket einrichten zum loggen:
+    let (tx, rx) = mpsc::channel::<String>();
+    let udp_socket = UdpSocket::bind("0.0.0.0:0")?;
+    let pc_adresse = format!("{}:{}", PC_IP, DEBUG_PORT);
+
+    // Test Log in den Kanal schmeißen:
+    let _ = tx.send(String::from("WLAN connected"));
+
+    // Pins definieren:
+    let pin_ir_rec = peripherals.pins.gpio15;
+    let pin_ir_beamer = peripherals.pins.gpio4;
+    let pin_ir_screen = peripherals.pins.gpio5;
+
+    // Heimkino Variable:
+    let mut cinema_is_running: bool = false;
+
 }
