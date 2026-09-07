@@ -14,18 +14,18 @@ pub mod ir_receiver;
 
 // Konstanten definieren:
 // WLAN:
-const SSID: &str = "**SSID**";
-const PASSWORD: &str = "***WLAN_PASSWORD***";
+const SSID: &str = "";
+const PASSWORD: &str = "";
 
 // IP-Adressen:
-const PC_IP: &str = "***PC_IP***";
+const PC_IP: &str = "";
 const DEBUG_PORT: u16 = 4211;
 
-const RECEIVER_IP: &str = "***REC_IP***";
+const RECEIVER_IP: &str = "";
 const RECEIVER_PORT: u16 = 8102;
 
 // MAC-Adresse für WakeonLan:
-const PC_MAC: [u8; 6] = [***MAC-Adresse***];
+const PC_MAC: [u8; 6] = [];
 
 // Infrarot Daten:
 const IR_DATA_SCREEN_DOWN: [u16; 199] = [
