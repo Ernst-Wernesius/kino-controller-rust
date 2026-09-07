@@ -4,11 +4,13 @@ use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition};
 use std::sync::mpsc;
 use std::net::UdpSocket;
 use anyhow::Result;
+use esp_idf_svc::hal::gpio::{PinDriver, Pull};
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::wifi::EspWifi;
 
 pub mod receiver;
 pub mod wifi;
+pub mod ir_receiver;
 
 // Konstanten definieren:
 // WLAN:
@@ -96,11 +98,18 @@ fn main() -> Result<()> {
     let _ = tx.send(String::from("WLAN connected"));
 
     // Pins definieren:
-    let pin_ir_rec = peripherals.pins.gpio15;
+    let pin_ir_rec = PinDriver::input(peripherals.pins.gpio15, Pull::Floating)?;
     let pin_ir_beamer = peripherals.pins.gpio4;
     let pin_ir_screen = peripherals.pins.gpio5;
+
+    // IR-Empfänger Modul instanziieren mit PIN:
+    let mut ir_receiver_1 = ir_receiver::IrReceiver::new(pin_ir_rec);
 
     // Heimkino Variable:
     let mut cinema_is_running: bool = false;
 
+    // Endlosschleife - Polling auf den IR Receiver:
+    loop {
+        let _ = tx.send(String::from("Waiting on IR-Signal"));
+    }
 }
