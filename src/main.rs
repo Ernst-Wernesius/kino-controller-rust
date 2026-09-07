@@ -111,5 +111,6 @@ fn main() -> Result<()> {
     // Endlosschleife - Polling auf den IR Receiver:
     loop {
         let _ = tx.send(String::from("Waiting on IR-Signal"));
+        //
     }
 }
