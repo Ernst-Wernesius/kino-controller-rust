@@ -33,14 +33,14 @@ impl<'a> Beamer<'a> {
 
     // Hilfsfunktion senden der Signale
     fn send_nec(&mut self, command: u32) -> Result<()> {
-        let mut symbols = Vec::new();
+        let mut symbols = Vec::with_capacity(34);
 
         symbols.push(Symbol::new(
             Pulse::new(PinState::High, PulseTicks::new(9000)?),
             Pulse::new(PinState::Low, PulseTicks::new(4500)?),
         ));
 
-        for i in 0..32 {
+        for i in (0..32).rev() {
             let bit = (command >> i) & 1;
             let mark = Pulse::new(PinState::High, PulseTicks::new(560)?);
             let space = Pulse::new(
@@ -52,7 +52,7 @@ impl<'a> Beamer<'a> {
 
         symbols.push(Symbol::new(
             Pulse::new(PinState::High, PulseTicks::new(560)?),
-            Pulse::new(PinState::Low, PulseTicks::new(0)?),
+            Pulse::new(PinState::Low, PulseTicks::new(1000)?),
         ));
 
         // 1. Einen CopyEncoder erstellen

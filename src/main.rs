@@ -2,7 +2,6 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition};
 use std::net::UdpSocket;
 use anyhow::Result;
-use esp_idf_svc::hal::gpio::{PinDriver, Pull};
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::wifi::EspWifi;
 use dotenvy_macro::dotenv;
@@ -11,8 +10,8 @@ use esp_idf_svc::hal::rmt::{RmtChannel, TxChannelDriver};
 use esp_idf_svc::hal::units::Hertz;
 use esp_idf_svc::wifi::BlockingWifi;
 use esp_idf_svc::hal::rmt::config::{TxChannelConfig, CarrierConfig, DutyPercent};
-use std::thread;
-use esp_idf_svc::hal::delay::Ets;
+use esp_idf_svc::hal::rmt::config::RxChannelConfig;
+use esp_idf_svc::hal::rmt::RxChannelDriver;
 
 pub mod receiver;
 pub mod wifi;
@@ -27,19 +26,20 @@ pub mod player;
 const SSID: &str = dotenv!("SSID");
 const PASSWORD: &str = dotenv!("PASSWORD");
 
-// PC IP Adresse fürs Logging:
+// PC IP-Adresse fürs Logging:
 const PC_IP: &str = dotenv!("PC_IP");
 const DEBUG_PORT: u16 = 4211;
 
-// Receiver IP Adresse:
+// Receiver IP-Adresse:
 const RECEIVER_IP: &str = dotenv!("REC_IP");
 const RECEIVER_PORT: u16 = 8102;
 
-// MAC-Adresse für WakeonLan:
+// MAC-Adresse für WakeOnLan:
 const PLAYER_MAC: [u8;6] = mac_parse::PC_MAC ;
 
 // IR_RII_REMOTE:
-const IR_DATA_REMOTE: u32 = 0x506A11EE;
+const IR_REMOTE_ADDR: u32 =0x560A;
+const IR_REMOTE_CMD: u32 = 0x88;
 
 fn main() -> Result<()> {
     // Patches und Logger:
@@ -60,7 +60,7 @@ fn main() -> Result<()> {
     // WLAN verbinden
     wifi::connect_wifi(&mut wifi_driver, SSID, PASSWORD)?;
 
-    // UDP Socket einrichten zum loggen:
+    // UDP Socket einrichten zum Loggen:
     let udp_socket = UdpSocket::bind("0.0.0.0:0")?;
     let pc_address = format!("{}:{}", PC_IP, DEBUG_PORT);
 
@@ -72,13 +72,19 @@ fn main() -> Result<()> {
         let _ = udp_socket.send_to(formatted.as_bytes(), &pc_address);
     };
 
-    // Test Log in den Kanal schmeißen:
+    // Test-Log in den Kanal schmeißen:
     net_log("WLAN connected");
 
     // Pins definieren:
     let pin_ir_receiver = peripherals.pins.gpio15;
     let pin_ir_screen = peripherals.pins.gpio5;
     let pin_beamer = peripherals.pins.gpio4;
+
+    // Config für IR Empfänger:
+    let rx_config = RxChannelConfig {
+        resolution: Hertz(1_000_000), // 1 Tick = 1 Mikrosekunde
+        ..Default::default()
+    };
 
     // Configs für IR-Sender:
     // RMT-Konfiguration:
@@ -89,15 +95,19 @@ fn main() -> Result<()> {
     // Carrier Konfiguration:
     let carrier_config = CarrierConfig {
         frequency: Hertz(38_000),
-        duty_cycle: DutyPercent::new(50f32)?,
+        duty_cycle: DutyPercent::new(0.5)?,
         ..Default::default()
     };
 
     // Structs:
     // IR_Receiver:
-    let mut _ir_receiver = ir_receiver::IrReceiver::new(
-        PinDriver::input(pin_ir_receiver, Pull::Floating)?
-    );
+    // Hardware-Treiber:
+    let rx_driver = RxChannelDriver::new(
+        pin_ir_receiver,
+        &rx_config,
+    )?;
+    // An IR Receiver übergeben:
+    let mut _ir_receiver = ir_receiver::IrReceiver::new(rx_driver);
 
     // Beamer:
     // Treiber erstellen:
@@ -132,33 +142,39 @@ fn main() -> Result<()> {
 
     // Endlosschleife - Polling auf den IR Receiver:
     loop {
-        // Signal entpacken:
-        if let Some(command) = _ir_receiver.listen() {
-            // Prüfen, ob das Signal übereinstimmt:
-            if command == IR_DATA_REMOTE {
-                net_log("Rii Button received");
+        net_log("Listening for IR-Signal");
+        // Wir prüfen exakt, welchen Status der Empfänger meldet
+        match _ir_receiver.listen() {
 
-                if !cinema_is_running {
+            // FALL 1: Ein sauberer NEC-Befehl wurde decodiert!
+            ir_receiver::IrStatus::Valid(addr, cmd) => {
+                if addr == IR_REMOTE_ADDR && cmd == IR_REMOTE_CMD {
+                    net_log("Rii Button received");
 
-                    start_cinema(&net_log,
-                                 &mut _beamer,
-                                 &mut _screen,
-                                 &_receiver,
-                                 &_player);
-
-                    // Status ändern:
-                    cinema_is_running = true;
-
-                    net_log("Cinema is running");
-                } else {
-                    net_log("Cinema is already running");
+                    if !cinema_is_running {
+                        start_cinema(&net_log, &mut _beamer, &mut _screen, &_receiver, &_player);
+                        cinema_is_running = true;
+                        net_log("Cinema is running");
+                    } else {
+                        net_log("Cinema is already running");
+                    }
+                } else if addr != 0 || cmd != 0 {
+                    let debug_msg = format!("Unbekanntes NEC Signal - Adresse: {:#X}, Befehl: {:#X}", addr, cmd);
+                    net_log(&debug_msg);
                 }
-            } else {
-                // Vielleicht Mal füŕs Debugging neue Nachrichten
+            },
+
+            // FALL 2: Es kam Licht an, aber der Decoder konnte es nicht lesen
+            ir_receiver::IrStatus::Raw(timings) => {
+                let raw_str = format!("Raw-Signal ({} Werte): {:?}", timings.len(), timings);
+                net_log(&raw_str);
+            },
+
+            // FALL 3: Es kam einfach nichts an (Timeout)
+            ir_receiver::IrStatus::Nothing => {
+                // Hier tun wir absolut gar nichts und die Schleife startet leise von vorn
             }
         }
-        Ets::delay_us(50);
-        thread::yield_now();
     }
 }
 
@@ -175,6 +191,7 @@ fn start_cinema(log: &impl Fn(&str),
 
     log("Screen Down");
     let _ = screen.move_down();
+    FreeRtos::delay_ms(500);
 
     log("Starting Receiver");
     let _ = receiver.turn_on();
