@@ -196,7 +196,7 @@ fn start_cinema(log: &impl Fn(&str),
     log("Starting Receiver");
     let _ = receiver.turn_on();
 
-    FreeRtos::delay_ms(40000);
+    FreeRtos::delay_ms(15000);
     log("Starting Player");
     let _ = player.wake_up();
 }
