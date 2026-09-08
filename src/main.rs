@@ -95,7 +95,7 @@ fn main() -> Result<()> {
     // Carrier Konfiguration:
     let carrier_config = CarrierConfig {
         frequency: Hertz(38_000),
-        duty_cycle: DutyPercent::new(0.5)?,
+        duty_cycle: DutyPercent::new(0.33)?,
         ..Default::default()
     };
 
@@ -152,8 +152,8 @@ fn main() -> Result<()> {
                     net_log("Rii Button received");
 
                     if !cinema_is_running {
-                        start_cinema(&net_log, &mut _beamer, &mut _screen, &_receiver, &_player);
                         cinema_is_running = true;
+                        start_cinema(&net_log, &mut _beamer, &mut _screen, &_receiver, &_player);
                         net_log("Cinema is running");
                     } else {
                         net_log("Cinema is already running");
@@ -187,16 +187,33 @@ fn start_cinema(log: &impl Fn(&str),
 
     // Beamer einschalten:
     log("Starting Beamer");
-    let _ = beamer.turn_on();
+    if let Err(e) = beamer.turn_on() {
+        log(&format!("ERROR Beamer: {:?}", e));
+    }
+    FreeRtos::delay_ms(300);
+    if let Err(e) = beamer.turn_on() {
+        log(&format!("ERROR Beamer: {:?}", e));
+    }
+
+    FreeRtos::delay_ms(300);
 
     log("Screen Down");
-    let _ = screen.move_down();
-    FreeRtos::delay_ms(500);
+    if let Err(e) = screen.move_down() {
+        log(&format!("ERROR Screen: {:?}", e));
+    }
+    FreeRtos::delay_ms(300);
+    if let Err(e) = screen.move_down() {
+        log(&format!("ERROR Screen: {:?}", e));
+    }
 
     log("Starting Receiver");
-    let _ = receiver.turn_on();
+    if let Err(e) = receiver.turn_on() {
+        log(&format!("ERROR Receiver: {:?}", e));
+    }
 
-    FreeRtos::delay_ms(15000);
+    FreeRtos::delay_ms(32000);
     log("Starting Player");
-    let _ = player.wake_up();
+    if let Err(e) = player.wake_up() {
+        log(&format!("ERROR Player: {:?}", e));
+    }
 }
