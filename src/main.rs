@@ -1,7 +1,5 @@
-use esp_idf_svc::hal::prelude::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition};
-use std::sync::mpsc;
+use esp_idf_svc::nvs::{EspDefaultNvsPartition};
 use std::net::UdpSocket;
 use anyhow::Result;
 use esp_idf_svc::hal::gpio::{PinDriver, Pull};
@@ -9,9 +7,10 @@ use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::wifi::EspWifi;
 use dotenvy_macro::dotenv;
 use esp_idf_svc::hal::delay::FreeRtos;
-use esp_idf_svc::hal::rmt::config::TxChannelConfig;
-use esp_idf_svc::hal::rmt::TxChannelDriver;
+use esp_idf_svc::hal::rmt::{RmtChannel, TxChannelDriver};
 use esp_idf_svc::hal::units::Hertz;
+use esp_idf_svc::wifi::BlockingWifi;
+use esp_idf_svc::hal::rmt::config::{TxChannelConfig, CarrierConfig, DutyPercent};
 
 pub mod receiver;
 pub mod wifi;
@@ -33,7 +32,7 @@ const RECEIVER_IP: &str = dotenv!("REC_IP");
 const RECEIVER_PORT: u16 = 8102;
 
 // MAC-Adresse für WakeonLan:
-const PC_MAC = mac_parse::PC_MAC ;
+const PC_MAC: [u8;6] = mac_parse::PC_MAC ;
 
 // IR_RII_REMOTE:
 const IR_DATA_REMOTE: u32 = 0x506A11EE;
@@ -44,7 +43,7 @@ fn main() -> Result<()> {
     esp_idf_svc::log::EspLogger::initialize_default();
 
     // Hardware holen:
-    let peripherals = Peripherals::take().unwrap();
+    let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
@@ -55,7 +54,7 @@ fn main() -> Result<()> {
     )?;
 
     // WLAN verbinden
-    wifi::connect_wifi(&mut wifi_driver, SSID, PASSWORD);
+    wifi::connect_wifi(&mut wifi_driver, SSID, PASSWORD)?;
 
     // UDP Socket einrichten zum loggen:
     let udp_socket = UdpSocket::bind("0.0.0.0:0")?;
@@ -73,33 +72,50 @@ fn main() -> Result<()> {
     net_log("WLAN connected");
 
     // Pins definieren:
+    let pin_ir_receiver = peripherals.pins.gpio15;
     let pin_ir_screen = peripherals.pins.gpio5;
+    let pin_beamer = peripherals.pins.gpio4;
+
+    // Configs für IR-Sender:
+    // RMT-Konfiguration:
+    let rmt_config = TxChannelConfig {
+        resolution: Hertz(1_000_000),
+        ..Default::default()
+    };
+    // Carrier Konfiguration:
+    let carrier_config = CarrierConfig {
+        frequency: Hertz(38_000),
+        duty_cycle: DutyPercent::new(50f32)?,
+        ..Default::default()
+    };
 
     // Structs:
     // IR_Receiver:
     let mut _ir_receiver = ir_receiver::IrReceiver::new(
-        PinDriver::input(peripherals.pins.gpio15, Pull::Floating)?
+        PinDriver::input(pin_ir_receiver, Pull::Floating)?
     );
 
     // Beamer:
-    // RMT-Konfiguration:
-    let beamer_rmt_config = TxChannelConfig {
-        resolution: Hertz(1_000_000),
-        carrier_enable: true,
-        carrier_freq: Hertz(38_000),
-        carrier_duty_percent: 50,
-        ..Default::default()
-    };
-    // Treiber mit Kanal und Pin:
-    let beamer_driver = TxChannelDriver::new(
-        peripherals.rmt.channel0,
-        peripherals.pins.gpio4,
-        &beamer_rmt_config,
+    // Treiber erstellen:
+    let mut beamer_driver = TxChannelDriver::new(
+        pin_beamer,
+        &rmt_config,
     )?;
+    // Carrier hinzufügen:
+    beamer_driver.apply_carrier(Some(&carrier_config))?;
     // Treiber an Beamer übergeben:
-    let mut _beamer = beamer::Beamer::new(beamer_driver)?;
+    let mut _beamer = beamer::Beamer::new(beamer_driver);
 
     // Leinwand:
+    // Treiber erstellen:
+    let mut screen_driver = TxChannelDriver::new(
+        pin_ir_screen,
+        &rmt_config,
+    )?;
+    // Carrier hinzufügen:
+    screen_driver.apply_carrier(Some(&carrier_config))?;
+    // Treiber übergeben
+    let mut _screen = screen::Screen::new(screen_driver);
 
     // Receiver:
 
@@ -116,9 +132,8 @@ fn main() -> Result<()> {
                 net_log("Rii Button received");
 
                 if !cinema_is_running {
-                    net_log("Starting Cinema");
 
-                    start_cinema(&mut _beamer);
+                    start_cinema(&net_log, &mut _beamer, &mut _screen);
 
                     // Status ändern:
                     cinema_is_running = true;
@@ -131,11 +146,17 @@ fn main() -> Result<()> {
                 // Vielleicht Mal füŕs Debugging neue Nachrichten
             }
         }
+        FreeRtos::delay_ms(50);
     }
-    Ok(())
 }
 
-fn start_cinema(beamer: &mut beamer::Beamer,) {
+fn start_cinema(log: &impl Fn(&str), beamer: &mut beamer::Beamer, screen: &mut screen::Screen) {
+    log("Starting cinema");
+
     // Beamer einschalten:
-    beamer.turn_on();
+    log("Starting beamer");
+    let _ = beamer.turn_on();
+
+    log("Screen down");
+    let _ = screen.move_down();
 }

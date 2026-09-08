@@ -8,7 +8,7 @@ use anyhow::Result;
 const IR_DATA_BEAMER: u32 = 0xC12FE817;
 
 pub struct Beamer<'a> {
-    // Wir speichern nur den fertigen Treiber
+    // fertigen Treiber speichern:
     tx_driver: TxChannelDriver<'a>,
 }
 
