@@ -1,6 +1,6 @@
-use esp_idf_svc::hal::gpio::{AnyIOPin, Input, PinDriver};
+use esp_idf_svc::hal::gpio::{Input, PinDriver};
 use infrared::protocol::Nec;
-use infrared::{PeriodicPoll, Receiver};
+use infrared::{PeriodicPoll};
 use infrared::cmd::AddressCommand;
 
 // IrReceiver als Struct bauen

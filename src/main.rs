@@ -11,6 +11,8 @@ use esp_idf_svc::hal::rmt::{RmtChannel, TxChannelDriver};
 use esp_idf_svc::hal::units::Hertz;
 use esp_idf_svc::wifi::BlockingWifi;
 use esp_idf_svc::hal::rmt::config::{TxChannelConfig, CarrierConfig, DutyPercent};
+use std::thread;
+use esp_idf_svc::hal::delay::Ets;
 
 pub mod receiver;
 pub mod wifi;
@@ -18,21 +20,23 @@ pub mod ir_receiver;
 pub mod mac_parse;
 pub mod beamer;
 pub mod screen;
+pub mod player;
 
 // Konstanten definieren:
 // WLAN:
 const SSID: &str = dotenv!("SSID");
 const PASSWORD: &str = dotenv!("PASSWORD");
 
-// IP-Adressen:
+// PC IP Adresse fürs Logging:
 const PC_IP: &str = dotenv!("PC_IP");
 const DEBUG_PORT: u16 = 4211;
 
+// Receiver IP Adresse:
 const RECEIVER_IP: &str = dotenv!("REC_IP");
 const RECEIVER_PORT: u16 = 8102;
 
 // MAC-Adresse für WakeonLan:
-const PC_MAC: [u8;6] = mac_parse::PC_MAC ;
+const PLAYER_MAC: [u8;6] = mac_parse::PC_MAC ;
 
 // IR_RII_REMOTE:
 const IR_DATA_REMOTE: u32 = 0x506A11EE;
@@ -118,7 +122,10 @@ fn main() -> Result<()> {
     let mut _screen = screen::Screen::new(screen_driver);
 
     // Receiver:
+    let _receiver = receiver::Receiver::new(RECEIVER_IP, RECEIVER_PORT);
 
+    // Player:
+    let _player = player::Player::new(PLAYER_MAC);
 
     // Heimkino Variable:
     let mut cinema_is_running: bool = false;
@@ -133,7 +140,11 @@ fn main() -> Result<()> {
 
                 if !cinema_is_running {
 
-                    start_cinema(&net_log, &mut _beamer, &mut _screen);
+                    start_cinema(&net_log,
+                                 &mut _beamer,
+                                 &mut _screen,
+                                 &_receiver,
+                                 &_player);
 
                     // Status ändern:
                     cinema_is_running = true;
@@ -146,17 +157,29 @@ fn main() -> Result<()> {
                 // Vielleicht Mal füŕs Debugging neue Nachrichten
             }
         }
-        FreeRtos::delay_ms(50);
+        Ets::delay_us(50);
+        thread::yield_now();
     }
 }
 
-fn start_cinema(log: &impl Fn(&str), beamer: &mut beamer::Beamer, screen: &mut screen::Screen) {
-    log("Starting cinema");
+fn start_cinema(log: &impl Fn(&str),
+                beamer: &mut beamer::Beamer,
+                screen: &mut screen::Screen,
+                receiver: &receiver::Receiver,
+                player: &player::Player) {
+    log("Starting Cinema");
 
     // Beamer einschalten:
-    log("Starting beamer");
+    log("Starting Beamer");
     let _ = beamer.turn_on();
 
-    log("Screen down");
+    log("Screen Down");
     let _ = screen.move_down();
+
+    log("Starting Receiver");
+    let _ = receiver.turn_on();
+
+    FreeRtos::delay_ms(40000);
+    log("Starting Player");
+    let _ = player.wake_up();
 }
