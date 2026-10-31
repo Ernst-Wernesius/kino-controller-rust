@@ -1,25 +1,22 @@
-use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::nvs::{EspDefaultNvsPartition};
-use std::net::UdpSocket;
 use anyhow::Result;
-use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::wifi::EspWifi;
 use dotenvy_macro::dotenv;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::delay::FreeRtos;
+use esp_idf_svc::hal::peripherals::Peripherals;
+use esp_idf_svc::hal::rmt::config::RxChannelConfig;
+use esp_idf_svc::hal::rmt::config::{CarrierConfig, DutyPercent, TxChannelConfig};
+use esp_idf_svc::hal::rmt::RxChannelDriver;
 use esp_idf_svc::hal::rmt::{RmtChannel, TxChannelDriver};
 use esp_idf_svc::hal::units::Hertz;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::BlockingWifi;
-use esp_idf_svc::hal::rmt::config::{TxChannelConfig, CarrierConfig, DutyPercent};
-use esp_idf_svc::hal::rmt::config::RxChannelConfig;
-use esp_idf_svc::hal::rmt::RxChannelDriver;
+use esp_idf_svc::wifi::EspWifi;
+use std::net::UdpSocket;
 
-pub mod receiver;
-pub mod wifi;
-pub mod ir_receiver;
-pub mod mac_parse;
 pub mod beamer;
+pub mod ir_receiver;
 pub mod screen;
-pub mod player;
+pub mod wifi;
 
 // Konstanten definieren:
 // WLAN:
@@ -30,15 +27,8 @@ const PASSWORD: &str = dotenv!("PASSWORD");
 const PC_IP: &str = dotenv!("PC_IP");
 const DEBUG_PORT: u16 = 4211;
 
-// Receiver IP-Adresse:
-const RECEIVER_IP: &str = dotenv!("REC_IP");
-const RECEIVER_PORT: u16 = 8102;
-
-// MAC-Adresse für WakeOnLan:
-const PLAYER_MAC: [u8;6] = mac_parse::PC_MAC ;
-
 // IR_RII_REMOTE:
-const IR_REMOTE_ADDR: u32 =0x560A;
+const IR_REMOTE_ADDR: u32 = 0x560A;
 const IR_REMOTE_CMD: u32 = 0x88;
 
 fn main() -> Result<()> {
@@ -102,19 +92,13 @@ fn main() -> Result<()> {
     // Structs:
     // IR_Receiver:
     // Hardware-Treiber:
-    let rx_driver = RxChannelDriver::new(
-        pin_ir_receiver,
-        &rx_config,
-    )?;
+    let rx_driver = RxChannelDriver::new(pin_ir_receiver, &rx_config)?;
     // An IR Receiver übergeben:
     let mut _ir_receiver = ir_receiver::IrReceiver::new(rx_driver);
 
     // Beamer:
     // Treiber erstellen:
-    let mut beamer_driver = TxChannelDriver::new(
-        pin_beamer,
-        &rmt_config,
-    )?;
+    let mut beamer_driver = TxChannelDriver::new(pin_beamer, &rmt_config)?;
     // Carrier hinzufügen:
     beamer_driver.apply_carrier(Some(&carrier_config))?;
     // Treiber an Beamer übergeben:
@@ -122,98 +106,40 @@ fn main() -> Result<()> {
 
     // Leinwand:
     // Treiber erstellen:
-    let mut screen_driver = TxChannelDriver::new(
-        pin_ir_screen,
-        &rmt_config,
-    )?;
+    let mut screen_driver = TxChannelDriver::new(pin_ir_screen, &rmt_config)?;
     // Carrier hinzufügen:
     screen_driver.apply_carrier(Some(&carrier_config))?;
     // Treiber übergeben
     let mut _screen = screen::Screen::new(screen_driver);
-
-    // Receiver:
-    let _receiver = receiver::Receiver::new(RECEIVER_IP, RECEIVER_PORT);
-
-    // Player:
-    let _player = player::Player::new(PLAYER_MAC);
-
-    // Heimkino Variable:
-    let mut cinema_is_running: bool = false;
 
     // Endlosschleife - Polling auf den IR Receiver:
     loop {
         net_log("Listening for IR-Signal");
         // Wir prüfen exakt, welchen Status der Empfänger meldet
         match _ir_receiver.listen() {
-
             // FALL 1: Ein sauberer NEC-Befehl wurde decodiert!
             ir_receiver::IrStatus::Valid(addr, cmd) => {
                 if addr == IR_REMOTE_ADDR && cmd == IR_REMOTE_CMD {
                     net_log("Rii Button received");
-
-                    if !cinema_is_running {
-                        cinema_is_running = true;
-                        start_cinema(&net_log, &mut _beamer, &mut _screen, &_receiver, &_player);
-                        net_log("Cinema is running");
-                    } else {
-                        net_log("Cinema is already running");
-                    }
                 } else if addr != 0 || cmd != 0 {
-                    let debug_msg = format!("Unbekanntes NEC Signal - Adresse: {:#X}, Befehl: {:#X}", addr, cmd);
+                    let debug_msg = format!(
+                        "Unbekanntes NEC Signal - Adresse: {:#X}, Befehl: {:#X}",
+                        addr, cmd
+                    );
                     net_log(&debug_msg);
                 }
-            },
+            }
 
             // FALL 2: Es kam Licht an, aber der Decoder konnte es nicht lesen
             ir_receiver::IrStatus::Raw(timings) => {
                 let raw_str = format!("Raw-Signal ({} Werte): {:?}", timings.len(), timings);
                 net_log(&raw_str);
-            },
+            }
 
             // FALL 3: Es kam einfach nichts an (Timeout)
             ir_receiver::IrStatus::Nothing => {
                 // Hier tun wir absolut gar nichts und die Schleife startet leise von vorn
             }
         }
-    }
-}
-
-fn start_cinema(log: &impl Fn(&str),
-                beamer: &mut beamer::Beamer,
-                screen: &mut screen::Screen,
-                receiver: &receiver::Receiver,
-                player: &player::Player) {
-    log("Starting Cinema");
-
-    // Beamer einschalten:
-    log("Starting Beamer");
-    if let Err(e) = beamer.turn_on() {
-        log(&format!("ERROR Beamer: {:?}", e));
-    }
-    FreeRtos::delay_ms(300);
-    if let Err(e) = beamer.turn_on() {
-        log(&format!("ERROR Beamer: {:?}", e));
-    }
-
-    FreeRtos::delay_ms(300);
-
-    log("Screen Down");
-    if let Err(e) = screen.move_down() {
-        log(&format!("ERROR Screen: {:?}", e));
-    }
-    FreeRtos::delay_ms(300);
-    if let Err(e) = screen.move_down() {
-        log(&format!("ERROR Screen: {:?}", e));
-    }
-
-    log("Starting Receiver");
-    if let Err(e) = receiver.turn_on() {
-        log(&format!("ERROR Receiver: {:?}", e));
-    }
-
-    FreeRtos::delay_ms(32000);
-    log("Starting Player");
-    if let Err(e) = player.wake_up() {
-        log(&format!("ERROR Player: {:?}", e));
     }
 }
