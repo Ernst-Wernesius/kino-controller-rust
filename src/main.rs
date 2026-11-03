@@ -8,6 +8,7 @@ use esp_idf_svc::hal::rmt::config::{CarrierConfig, DutyPercent, TxChannelConfig}
 use esp_idf_svc::hal::rmt::RxChannelDriver;
 use esp_idf_svc::hal::rmt::{RmtChannel, TxChannelDriver};
 use esp_idf_svc::hal::units::Hertz;
+use esp_idf_svc::mqtt::client::{EspMqttClient, MqttClientConfiguration};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::BlockingWifi;
 use esp_idf_svc::wifi::EspWifi;
@@ -30,6 +31,12 @@ const DEBUG_PORT: u16 = 4211;
 // IR_RII_REMOTE:
 const IR_REMOTE_ADDR: u32 = 0x560A;
 const IR_REMOTE_CMD: u32 = 0x88;
+
+// MQTT:
+const MQTT_URL: &str = dotenv!("MQTT_URL");
+const MQTT_USER: &str = dotenv!("MQTT_USER");
+const MQTT_PASSWD: &str = dotenv!("MQTT_PASS");
+const MQTT_CLIENT:  &str = dotenv!("MQTT_CLIENT")
 
 fn main() -> Result<()> {
     // Patches und Logger:
@@ -64,6 +71,17 @@ fn main() -> Result<()> {
 
     // Test-Log in den Kanal schmeißen:
     net_log("WLAN connected");
+
+   // Config für MQTT Client:
+   let mqtt_config = MqttClientConfiguration {
+        client_id: Some(MQTT_CLIENT),
+        username: Some(MQTT_USER),
+        password: Some(MQTT_PASSWD),
+        ..Default::default()
+    };
+
+    // Config an Client übergeben:
+    let (mut mqtt_client, mut mqtt_connection) = EspMqttClient::new(MQTT_URL, &mqtt_config)?;
 
     // Pins definieren:
     let pin_ir_receiver = peripherals.pins.gpio15;
