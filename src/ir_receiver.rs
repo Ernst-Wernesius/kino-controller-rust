@@ -97,10 +97,12 @@ impl<'a> IrReceiver<'a> {
     }
 }
 
+// Funktion die in main aufgerufen wird:
 pub fn spawn_ir_listener(
     pin: impl InputPin + Send + 'static,
     tx: Sender<Event>,
 ) -> anyhow::Result<()> {
+    // Eigenen Thread aufbauen
     std::thread::Builder::new()
         .stack_size(8 * 1024)
         .spawn(move || {

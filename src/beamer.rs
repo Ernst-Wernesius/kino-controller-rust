@@ -11,6 +11,7 @@ const IR_DATA_BEAMER: u32 = 0xC12FE817;
 pub struct Beamer<'a> {
     // fertigen Treiber speichern:
     tx_driver: TxChannelDriver<'a>,
+    // Cooldown Timer:
     blocked_until: Option<Instant>,
 }
 

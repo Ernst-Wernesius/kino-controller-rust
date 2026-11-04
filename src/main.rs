@@ -47,7 +47,7 @@ fn main() {
         log::error!("Error: {:?}", e);
     }
 
-    log::error!("Run has endet, restarting in 5 seconds");
+    log::error!("Run has ended, restarting in 5 seconds");
     FreeRtos::delay_ms(5000);
     esp_idf_svc::hal::reset::restart();
 }
