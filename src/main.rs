@@ -155,43 +155,23 @@ fn main() -> Result<()> {
                 }
             }
             Event::Beamer(BeamerCommand::On) => {
-                if let Err(e) = _mqtt_client.publish(
-                    mqtt_client::TOPIC_BEAMER_SET,
-                    QoS::AtLeastOnce,
-                    true,
-                    b"ON",
-                ) {
-                    net_log(&format!("Publish failed: {:?}", e));
+                if let Err(e) = _beamer.turn_on() {
+                    net_log(&format!("Turning on Beamer failed: {:?}", e));
                 }
             }
             Event::Beamer(BeamerCommand::Off) => {
-                if let Err(e) = _mqtt_client.publish(
-                    mqtt_client::TOPIC_BEAMER_SET,
-                    QoS::AtLeastOnce,
-                    true,
-                    b"OFF",
-                ) {
-                    net_log(&format!("Publish failed: {:?}", e));
+                if let Err(e) = _beamer.turn_off() {
+                    net_log(&format!("Turning off Beamer failed: {:?}", e));
                 }
             }
             Event::Screen(ScreenDirection::Up) => {
-                if let Err(e) = _mqtt_client.publish(
-                    mqtt_client::TOPIC_SCREEN_SET,
-                    QoS::AtLeastOnce,
-                    true,
-                    b"UP",
-                ) {
-                    net_log(&format!("Publish failed: {:?}", e));
+                if let Err(e) = _screen.move_up() {
+                    net_log(&format!("Pulling Screen up failed: {:?}", e));
                 }
             }
             Event::Screen(ScreenDirection::Down) => {
-                if let Err(e) = _mqtt_client.publish(
-                    mqtt_client::TOPIC_SCREEN_SET,
-                    QoS::AtLeastOnce,
-                    true,
-                    b"DOWN",
-                ) {
-                    net_log(&format!("Publish failed: {:?}", e));
+                if let Err(e) = _screen.move_down() {
+                    net_log(&format!("Pulling Screen down failed: {:?}", e));
                 }
             }
             Event::RiiKey => {
