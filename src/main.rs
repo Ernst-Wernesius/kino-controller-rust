@@ -144,12 +144,12 @@ fn main() -> Result<()> {
                     net_log(&format!("Publish failed: {:?}", e));
                 }
                 if let Err(e) =
-                    _mqtt_client.subscribe(mqtt_client::TOPIC_BEAMER_SET, QoS::AtLeastOnce)
+                    _mqtt_client.subscribe(mqtt_client::TOPIC_BEAMER_SET, QoS::AtMostOnce)
                 {
                     net_log(&format!("Subscribe topic failed: {:?}", e));
                 }
                 if let Err(e) =
-                    _mqtt_client.subscribe(mqtt_client::TOPIC_SCREEN_SET, QoS::AtLeastOnce)
+                    _mqtt_client.subscribe(mqtt_client::TOPIC_SCREEN_SET, QoS::AtMostOnce)
                 {
                     net_log(&format!("Subscribe topic failed: {:?}", e));
                 }
@@ -176,7 +176,7 @@ fn main() -> Result<()> {
             }
             Event::RiiKey => {
                 if let Err(e) =
-                    _mqtt_client.publish(mqtt_client::TOPIC_RII, QoS::AtLeastOnce, true, b"SET")
+                    _mqtt_client.publish(mqtt_client::TOPIC_RII, QoS::AtLeastOnce, false, b"SET")
                 {
                     net_log(&format!("Publish failed: {:?}", e));
                 }
