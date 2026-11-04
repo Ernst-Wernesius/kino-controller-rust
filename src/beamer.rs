@@ -1,8 +1,8 @@
+use anyhow::Result;
 use esp_idf_svc::hal::delay::FreeRtos;
-use esp_idf_svc::hal::rmt::{PinState, Pulse, PulseTicks, Symbol, TxChannelDriver};
 use esp_idf_svc::hal::rmt::config::TransmitConfig;
 use esp_idf_svc::hal::rmt::encoder::CopyEncoder;
-use anyhow::Result;
+use esp_idf_svc::hal::rmt::{PinState, Pulse, PulseTicks, Symbol, TxChannelDriver};
 
 // IR Signal der Fernbedienung
 const IR_DATA_BEAMER: u32 = 0xC12FE817;
@@ -45,7 +45,11 @@ impl<'a> Beamer<'a> {
             let mark = Pulse::new(PinState::High, PulseTicks::new(560)?);
             let space = Pulse::new(
                 PinState::Low,
-                if bit == 1 { PulseTicks::new(1690)? } else { PulseTicks::new(560)? },
+                if bit == 1 {
+                    PulseTicks::new(1690)?
+                } else {
+                    PulseTicks::new(560)?
+                },
             );
             symbols.push(Symbol::new(mark, space));
         }
@@ -62,7 +66,8 @@ impl<'a> Beamer<'a> {
         let tx_config = TransmitConfig::default();
 
         // 3. Die drei Parameter übergeben
-        self.tx_driver.send_and_wait(&mut encoder, &symbols, &tx_config)?;
+        self.tx_driver
+            .send_and_wait(&mut encoder, &symbols, &tx_config)?;
 
         Ok(())
     }

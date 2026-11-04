@@ -1,21 +1,24 @@
 use anyhow::Result;
 use dotenvy_macro::dotenv;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::hal::rmt::config::RxChannelConfig;
 use esp_idf_svc::hal::rmt::config::{CarrierConfig, DutyPercent, TxChannelConfig};
-use esp_idf_svc::hal::rmt::RxChannelDriver;
 use esp_idf_svc::hal::rmt::{RmtChannel, TxChannelDriver};
 use esp_idf_svc::hal::units::Hertz;
-use esp_idf_svc::mqtt::client::{EspMqttClient, MqttClientConfiguration};
+use esp_idf_svc::mqtt::client::{EspMqttClient, LwtConfiguration, MqttClientConfiguration, QoS};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::BlockingWifi;
 use esp_idf_svc::wifi::EspWifi;
 use std::net::UdpSocket;
+use std::sync::mpsc;
+use std::time::Duration;
+
+use crate::event::{BeamerCommand, Event, ScreenDirection};
 
 pub mod beamer;
+pub mod event;
 pub mod ir_receiver;
+pub mod mqtt_client;
 pub mod screen;
 pub mod wifi;
 
@@ -28,15 +31,11 @@ const PASSWORD: &str = dotenv!("PASSWORD");
 const PC_IP: &str = dotenv!("PC_IP");
 const DEBUG_PORT: u16 = 4211;
 
-// IR_RII_REMOTE:
-const IR_REMOTE_ADDR: u32 = 0x560A;
-const IR_REMOTE_CMD: u32 = 0x88;
-
 // MQTT:
 const MQTT_URL: &str = dotenv!("MQTT_URL");
 const MQTT_USER: &str = dotenv!("MQTT_USER");
 const MQTT_PASSWD: &str = dotenv!("MQTT_PASS");
-const MQTT_CLIENT:  &str = dotenv!("MQTT_CLIENT")
+const MQTT_CLIENT: &str = dotenv!("MQTT_CLIENT");
 
 fn main() -> Result<()> {
     // Patches und Logger:
@@ -72,34 +71,18 @@ fn main() -> Result<()> {
     // Test-Log in den Kanal schmeißen:
     net_log("WLAN connected");
 
-   // Config für MQTT Client:
-   let mqtt_config = MqttClientConfiguration {
-        client_id: Some(MQTT_CLIENT),
-        username: Some(MQTT_USER),
-        password: Some(MQTT_PASSWD),
-        ..Default::default()
-    };
-
-    // Config an Client übergeben:
-    let (mut mqtt_client, mut mqtt_connection) = EspMqttClient::new(MQTT_URL, &mqtt_config)?;
-
     // Pins definieren:
     let pin_ir_receiver = peripherals.pins.gpio15;
-    let pin_ir_screen = peripherals.pins.gpio5;
+    let pin_screen = peripherals.pins.gpio5;
     let pin_beamer = peripherals.pins.gpio4;
 
-    // Config für IR Empfänger:
-    let rx_config = RxChannelConfig {
-        resolution: Hertz(1_000_000), // 1 Tick = 1 Mikrosekunde
-        ..Default::default()
-    };
-
-    // Configs für IR-Sender:
+    // Konfigurationen:
     // RMT-Konfiguration:
     let rmt_config = TxChannelConfig {
         resolution: Hertz(1_000_000),
         ..Default::default()
     };
+
     // Carrier Konfiguration:
     let carrier_config = CarrierConfig {
         frequency: Hertz(38_000),
@@ -107,13 +90,22 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    // Structs:
-    // IR_Receiver:
-    // Hardware-Treiber:
-    let rx_driver = RxChannelDriver::new(pin_ir_receiver, &rx_config)?;
-    // An IR Receiver übergeben:
-    let mut _ir_receiver = ir_receiver::IrReceiver::new(rx_driver);
+    // Config für MQTT Client:
+    let mqtt_config = MqttClientConfiguration {
+        client_id: Some(MQTT_CLIENT),
+        username: Some(MQTT_USER),
+        password: Some(MQTT_PASSWD),
+        lwt: Some(LwtConfiguration {
+            topic: mqtt_client::TOPIC_STATUS,
+            payload: b"offline",
+            qos: QoS::AtLeastOnce,
+            retain: true,
+        }),
+        keep_alive_interval: Some(Duration::from_secs(30)),
+        ..Default::default()
+    };
 
+    // Structs:
     // Beamer:
     // Treiber erstellen:
     let mut beamer_driver = TxChannelDriver::new(pin_beamer, &rmt_config)?;
@@ -124,40 +116,94 @@ fn main() -> Result<()> {
 
     // Leinwand:
     // Treiber erstellen:
-    let mut screen_driver = TxChannelDriver::new(pin_ir_screen, &rmt_config)?;
+    let mut screen_driver = TxChannelDriver::new(pin_screen, &rmt_config)?;
     // Carrier hinzufügen:
     screen_driver.apply_carrier(Some(&carrier_config))?;
     // Treiber übergeben
     let mut _screen = screen::Screen::new(screen_driver);
 
-    // Endlosschleife - Polling auf den IR Receiver:
-    loop {
-        net_log("Listening for IR-Signal");
-        // Wir prüfen exakt, welchen Status der Empfänger meldet
-        match _ir_receiver.listen() {
-            // FALL 1: Ein sauberer NEC-Befehl wurde decodiert!
-            ir_receiver::IrStatus::Valid(addr, cmd) => {
-                if addr == IR_REMOTE_ADDR && cmd == IR_REMOTE_CMD {
-                    net_log("Rii Button received");
-                } else if addr != 0 || cmd != 0 {
-                    let debug_msg = format!(
-                        "Unbekanntes NEC Signal - Adresse: {:#X}, Befehl: {:#X}",
-                        addr, cmd
-                    );
-                    net_log(&debug_msg);
+    // MQTT Client:
+    let (mut _mqtt_client, mqtt_connection) = EspMqttClient::new(MQTT_URL, &mqtt_config)?;
+
+    let (tx, rx) = mpsc::channel();
+
+    mqtt_client::spawn_mqtt_listener(mqtt_connection, tx.clone())?;
+
+    ir_receiver::spawn_ir_listener(pin_ir_receiver, tx.clone())?;
+
+    // Verarbeitung der Events aus den beiden Threats
+    for event in rx {
+        match event {
+            Event::Connected => {
+                if let Err(e) = _mqtt_client.publish(
+                    mqtt_client::TOPIC_STATUS,
+                    QoS::AtLeastOnce,
+                    true,
+                    b"online",
+                ) {
+                    net_log(&format!("Publish failed: {:?}", e));
+                }
+                if let Err(e) =
+                    _mqtt_client.subscribe(mqtt_client::TOPIC_BEAMER_SET, QoS::AtLeastOnce)
+                {
+                    net_log(&format!("Subscribe topic failed: {:?}", e));
+                }
+                if let Err(e) =
+                    _mqtt_client.subscribe(mqtt_client::TOPIC_SCREEN_SET, QoS::AtLeastOnce)
+                {
+                    net_log(&format!("Subscribe topic failed: {:?}", e));
                 }
             }
-
-            // FALL 2: Es kam Licht an, aber der Decoder konnte es nicht lesen
-            ir_receiver::IrStatus::Raw(timings) => {
-                let raw_str = format!("Raw-Signal ({} Werte): {:?}", timings.len(), timings);
-                net_log(&raw_str);
+            Event::Beamer(BeamerCommand::On) => {
+                if let Err(e) = _mqtt_client.publish(
+                    mqtt_client::TOPIC_BEAMER_SET,
+                    QoS::AtLeastOnce,
+                    true,
+                    b"ON",
+                ) {
+                    net_log(&format!("Publish failed: {:?}", e));
+                }
             }
-
-            // FALL 3: Es kam einfach nichts an (Timeout)
-            ir_receiver::IrStatus::Nothing => {
-                // Hier tun wir absolut gar nichts und die Schleife startet leise von vorn
+            Event::Beamer(BeamerCommand::Off) => {
+                if let Err(e) = _mqtt_client.publish(
+                    mqtt_client::TOPIC_BEAMER_SET,
+                    QoS::AtLeastOnce,
+                    true,
+                    b"OFF",
+                ) {
+                    net_log(&format!("Publish failed: {:?}", e));
+                }
             }
+            Event::Screen(ScreenDirection::Up) => {
+                if let Err(e) = _mqtt_client.publish(
+                    mqtt_client::TOPIC_SCREEN_SET,
+                    QoS::AtLeastOnce,
+                    true,
+                    b"UP",
+                ) {
+                    net_log(&format!("Publish failed: {:?}", e));
+                }
+            }
+            Event::Screen(ScreenDirection::Down) => {
+                if let Err(e) = _mqtt_client.publish(
+                    mqtt_client::TOPIC_SCREEN_SET,
+                    QoS::AtLeastOnce,
+                    true,
+                    b"DOWN",
+                ) {
+                    net_log(&format!("Publish failed: {:?}", e));
+                }
+            }
+            Event::RiiKey => {
+                if let Err(e) =
+                    _mqtt_client.publish(mqtt_client::TOPIC_RII, QoS::AtLeastOnce, true, b"SET")
+                {
+                    net_log(&format!("Publish failed: {:?}", e));
+                }
+            }
+            Event::Log(msg) => net_log(&msg),
         }
     }
+
+    Ok(())
 }

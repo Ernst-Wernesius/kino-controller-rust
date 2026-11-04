@@ -1,10 +1,21 @@
-use esp_idf_svc::hal::rmt::{RxChannelDriver, Symbol, Pulse, PulseTicks, PinState};
-use esp_idf_svc::hal::rmt::config::ReceiveConfig;
+use std::sync::mpsc::Sender;
 
+use esp_idf_svc::hal::gpio::InputPin;
+use esp_idf_svc::hal::rmt::config::{ReceiveConfig, RxChannelConfig};
+use esp_idf_svc::hal::rmt::{PinState, Pulse, PulseTicks, RxChannelDriver, Symbol};
+use esp_idf_svc::hal::units::Hertz;
+
+use crate::event::Event;
+
+// IR_RII_REMOTE:
+pub const IR_REMOTE_ADDR: u32 = 0x560A;
+pub const IR_REMOTE_CMD: u32 = 0x88;
+
+#[derive(Debug)]
 pub enum IrStatus {
     Valid(u32, u32),
     Raw(Vec<u16>),
-    Nothing
+    Nothing,
 }
 
 pub struct IrReceiver<'a> {
@@ -27,7 +38,6 @@ impl<'a> IrReceiver<'a> {
         };
 
         if let Ok(rx_size) = self.rx_driver.receive(&mut symbols, &rx_config) {
-
             if rx_size > 0 {
                 // 1. Rohdaten extrahieren (Mark und Space in µs)
                 let mut raw_timings: Vec<u16> = Vec::with_capacity(rx_size * 2);
@@ -81,4 +91,60 @@ impl<'a> IrReceiver<'a> {
         }
         IrStatus::Nothing
     }
+}
+
+pub fn spawn_ir_listener(
+    pin: impl InputPin + Send + 'static,
+    tx: Sender<Event>,
+) -> anyhow::Result<()> {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024)
+        .spawn(move || {
+            // Config für IR Empfänger:
+            let rx_config = RxChannelConfig {
+                resolution: Hertz(1_000_000), // 1 Tick = 1 Mikrosekunde
+                ..Default::default()
+            };
+            // Hardware-Treiber:
+            let rx_driver = match RxChannelDriver::new(pin, &rx_config) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = tx.send(Event::Log(format!("IR-Treiber Fehler: {:?}", e)));
+                    return;
+                }
+            };
+            // An IR Receiver übergeben:
+            let mut receiver = IrReceiver::new(rx_driver);
+
+            loop {
+                match receiver.listen() {
+                    // FALL 1: Ein sauberer NEC-Befehl wurde decodiert!
+                    IrStatus::Valid(addr, cmd) => {
+                        if addr == IR_REMOTE_ADDR && cmd == IR_REMOTE_CMD {
+                            let _ = tx.send(Event::RiiKey);
+                        } else if addr != 0 || cmd != 0 {
+                            let _ = tx.send(Event::Log(format!(
+                                "Unbekanntes NEC Signal - Adresse: {:#X}, Befehl: {:#X}",
+                                addr, cmd
+                            )));
+                        }
+                    }
+
+                    // FALL 2: Es kam Licht an, aber der Decoder konnte es nicht lesen
+                    IrStatus::Raw(timings) => {
+                        let _ = tx.send(Event::Log(format!(
+                            "Raw-Signal ({} Werte): {:?}",
+                            timings.len(),
+                            timings
+                        )));
+                    }
+
+                    // FALL 3: Es kam einfach nichts an (Timeout)
+                    IrStatus::Nothing => {
+                        // Hier tun wir absolut gar nichts und die Schleife startet leise von vorn
+                    }
+                }
+            }
+        })?;
+    Ok(())
 }
