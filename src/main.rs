@@ -1,14 +1,15 @@
 use anyhow::Result;
 use dotenvy_macro::dotenv;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::hal::rmt::config::{CarrierConfig, DutyPercent, TxChannelConfig};
 use esp_idf_svc::hal::rmt::{RmtChannel, TxChannelDriver};
 use esp_idf_svc::hal::units::Hertz;
 use esp_idf_svc::mqtt::client::{EspMqttClient, LwtConfiguration, MqttClientConfiguration, QoS};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use esp_idf_svc::wifi::BlockingWifi;
 use esp_idf_svc::wifi::EspWifi;
+use esp_idf_svc::wifi::{BlockingWifi, WifiEvent};
 use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -37,10 +38,23 @@ const MQTT_USER: &str = dotenv!("MQTT_USER");
 const MQTT_PASSWD: &str = dotenv!("MQTT_PASS");
 const MQTT_CLIENT: &str = dotenv!("MQTT_CLIENT");
 
-fn main() -> Result<()> {
+fn main() {
     // Patches und Logger:
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
+
+    if let Err(e) = run() {
+        log::error!("Error: {:?}", e);
+    }
+
+    log::error!("Run has endet, restarting in 5 seconds");
+    FreeRtos::delay_ms(5000);
+    esp_idf_svc::hal::reset::restart();
+}
+
+fn run() -> Result<()> {
+    // Event Channel aufbauen
+    let (tx, rx) = mpsc::channel();
 
     // Hardware holen:
     let peripherals = Peripherals::take()?;
@@ -50,8 +64,16 @@ fn main() -> Result<()> {
     // WLAN Treiber für die Hilfsfunktion bereit holen:
     let mut wifi_driver = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
-        sys_loop,
+        sys_loop.clone(),
     )?;
+
+    // Wifi Subscription für die Überwachung der WLAN Verbindung:
+    let wifi_tx = tx.clone();
+    let _wifi_subscription = sys_loop.subscribe::<WifiEvent, _>(move |event| {
+        if matches!(event, WifiEvent::StaDisconnected(..)) {
+            let _ = wifi_tx.send(Event::WifiLost);
+        }
+    })?;
 
     // WLAN verbinden
     wifi::connect_wifi(&mut wifi_driver, SSID, PASSWORD)?;
@@ -125,8 +147,6 @@ fn main() -> Result<()> {
     // MQTT Client:
     let (mut _mqtt_client, mqtt_connection) = EspMqttClient::new(MQTT_URL, &mqtt_config)?;
 
-    let (tx, rx) = mpsc::channel();
-
     mqtt_client::spawn_mqtt_listener(mqtt_connection, tx.clone())?;
 
     ir_receiver::spawn_ir_listener(pin_ir_receiver, tx.clone())?;
@@ -182,6 +202,18 @@ fn main() -> Result<()> {
                 }
             }
             Event::Log(msg) => net_log(&msg),
+            Event::WifiLost => {
+                if !wifi_driver.is_connected().unwrap_or(false) {
+                    FreeRtos::delay_ms(2000);
+                    if let Err(e) = wifi_driver.connect() {
+                        log::error!("Error with the wifi connection: {:?}", e);
+                    } else {
+                        if let Err(e) = wifi_driver.wait_netif_up() {
+                            log::error!("Error with the wifi connection: {:?}", e);
+                        }
+                    }
+                }
+            }
         }
     }
 

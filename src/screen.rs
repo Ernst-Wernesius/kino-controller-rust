@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::rmt::config::TransmitConfig;
@@ -18,29 +20,37 @@ const IR_DATA_SCREEN_UP: [u16; 50] = [
 
 pub struct Screen<'a> {
     tx_driver: TxChannelDriver<'a>,
+    blocked_until: Option<Instant>,
 }
 
 impl<'a> Screen<'a> {
     // Konstruktor:
     pub fn new(tx_driver: TxChannelDriver<'a>) -> Self {
-        Self { tx_driver }
+        Self {
+            tx_driver,
+            blocked_until: None,
+        }
     }
 
     // Runterfahren:
     pub fn move_down(&mut self) -> Result<()> {
+        self.check_blocked()?;
         for _ in 0..3 {
             self.send_raw(&IR_DATA_SCREEN_DOWN)?;
             FreeRtos::delay_ms(14);
         }
+        self.blocked_until = Some(Instant::now() + Duration::from_secs(15));
         Ok(())
     }
 
     // Hochfahren:
     pub fn move_up(&mut self) -> Result<()> {
+        self.check_blocked()?;
         for _ in 0..3 {
             self.send_raw(&IR_DATA_SCREEN_UP)?;
             FreeRtos::delay_ms(14);
         }
+        self.blocked_until = Some(Instant::now() + Duration::from_secs(15));
         Ok(())
     }
 
@@ -66,6 +76,17 @@ impl<'a> Screen<'a> {
         self.tx_driver
             .send_and_wait(&mut encoder, &symbols, &tx_config)?;
 
+        Ok(())
+    }
+
+    fn check_blocked(&self) -> Result<()> {
+        if let Some(until) = self.blocked_until {
+            let now = Instant::now();
+            if now < until {
+                let rest = until.duration_since(now).as_secs_f32();
+                anyhow::bail!("Screen blocked for another {:.1} s", rest);
+            }
+        }
         Ok(())
     }
 }

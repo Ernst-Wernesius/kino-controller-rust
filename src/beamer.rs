@@ -3,6 +3,7 @@ use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::rmt::config::TransmitConfig;
 use esp_idf_svc::hal::rmt::encoder::CopyEncoder;
 use esp_idf_svc::hal::rmt::{PinState, Pulse, PulseTicks, Symbol, TxChannelDriver};
+use std::time::{Duration, Instant};
 
 // IR Signal der Fernbedienung
 const IR_DATA_BEAMER: u32 = 0xC12FE817;
@@ -10,24 +11,33 @@ const IR_DATA_BEAMER: u32 = 0xC12FE817;
 pub struct Beamer<'a> {
     // fertigen Treiber speichern:
     tx_driver: TxChannelDriver<'a>,
+    blocked_until: Option<Instant>,
 }
 
 impl<'a> Beamer<'a> {
     // Konstruktor nimmt fertigen Treiber entgegen:
     pub fn new(tx_driver: TxChannelDriver<'a>) -> Self {
-        Self { tx_driver }
+        Self {
+            tx_driver,
+            blocked_until: None,
+        }
     }
 
     // Beamer einschalten:
     pub fn turn_on(&mut self) -> Result<()> {
-        self.send_nec(IR_DATA_BEAMER)
+        self.check_blocked()?;
+        self.send_nec(IR_DATA_BEAMER)?;
+        self.blocked_until = Some(Instant::now() + Duration::from_secs(30));
+        Ok(())
     }
 
     // Beamer ausschalten:
     pub fn turn_off(&mut self) -> Result<()> {
+        self.check_blocked()?;
         self.send_nec(IR_DATA_BEAMER)?;
         FreeRtos::delay_ms(2000);
         self.send_nec(IR_DATA_BEAMER)?;
+        self.blocked_until = Some(Instant::now() + Duration::from_secs(5));
         Ok(())
     }
 
@@ -69,6 +79,17 @@ impl<'a> Beamer<'a> {
         self.tx_driver
             .send_and_wait(&mut encoder, &symbols, &tx_config)?;
 
+        Ok(())
+    }
+
+    fn check_blocked(&self) -> Result<()> {
+        if let Some(until) = self.blocked_until {
+            let now = Instant::now();
+            if now < until {
+                let rest = until.duration_since(now).as_secs_f32();
+                anyhow::bail!("Beamer blocked for another {:.1} s", rest);
+            }
+        }
         Ok(())
     }
 }

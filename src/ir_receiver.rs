@@ -1,5 +1,6 @@
 use std::sync::mpsc::Sender;
 
+use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::gpio::InputPin;
 use esp_idf_svc::hal::rmt::config::{ReceiveConfig, RxChannelConfig};
 use esp_idf_svc::hal::rmt::{PinState, Pulse, PulseTicks, RxChannelDriver, Symbol};
@@ -8,8 +9,11 @@ use esp_idf_svc::hal::units::Hertz;
 use crate::event::Event;
 
 // IR_RII_REMOTE:
-pub const IR_REMOTE_ADDR: u32 = 0x560A;
-pub const IR_REMOTE_CMD: u32 = 0x88;
+const IR_REMOTE_ADDR: u32 = 0x560A;
+const IR_REMOTE_CMD: u32 = 0x88;
+
+// Debug Logging Konstante:
+const LOG_RAW_SIGNALS: bool = false;
 
 #[derive(Debug)]
 pub enum IrStatus {
@@ -122,6 +126,7 @@ pub fn spawn_ir_listener(
                     IrStatus::Valid(addr, cmd) => {
                         if addr == IR_REMOTE_ADDR && cmd == IR_REMOTE_CMD {
                             let _ = tx.send(Event::RiiKey);
+                            FreeRtos::delay_ms(500);
                         } else if addr != 0 || cmd != 0 {
                             let _ = tx.send(Event::Log(format!(
                                 "Unbekanntes NEC Signal - Adresse: {:#X}, Befehl: {:#X}",
@@ -132,11 +137,13 @@ pub fn spawn_ir_listener(
 
                     // FALL 2: Es kam Licht an, aber der Decoder konnte es nicht lesen
                     IrStatus::Raw(timings) => {
-                        let _ = tx.send(Event::Log(format!(
-                            "Raw-Signal ({} Werte): {:?}",
-                            timings.len(),
-                            timings
-                        )));
+                        if LOG_RAW_SIGNALS {
+                            let _ = tx.send(Event::Log(format!(
+                                "Raw-Signal ({} Werte): {:?}",
+                                timings.len(),
+                                timings
+                            )));
+                        }
                     }
 
                     // FALL 3: Es kam einfach nichts an (Timeout)

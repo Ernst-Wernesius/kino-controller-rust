@@ -5,6 +5,7 @@ pub enum Event {
     Screen(ScreenDirection),
     RiiKey,
     Log(String),
+    WifiLost,
 }
 
 #[derive(Debug)]
